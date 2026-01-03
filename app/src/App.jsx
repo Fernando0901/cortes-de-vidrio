@@ -5,17 +5,16 @@ import OrderForm from './components/OrderForm';
 import Visualizer from './components/Visualizer';
 
 
-import { calculateBestOption } from './utils/optimizer';
+import { calculateAllCuts } from './utils/optimizer';
 
 function App() {
-  const [activeTab, setActiveTab] = useState('inputs'); // 'inputs' | 'results'
-  const [unit, setUnit] = useState('cm'); // Global Unit State
+  const [activeTab, setActiveTab] = useState('inputs');
+  const [unit, setUnit] = useState('cm');
 
   const [inventory, setInventory] = useState([]);
   const [orders, setOrders] = useState([]);
   const [result, setResult] = useState(null);
 
-  // Cargar datos guardados
   useEffect(() => {
     const storedInventory = localStorage.getItem('glass_inventory');
     if (storedInventory) setInventory(JSON.parse(storedInventory));
@@ -23,7 +22,6 @@ function App() {
     if (storedOrders) setOrders(JSON.parse(storedOrders));
   }, []);
 
-  // Guardar datos automáticamente
   useEffect(() => {
     localStorage.setItem('glass_inventory', JSON.stringify(inventory));
   }, [inventory]);
@@ -42,26 +40,30 @@ function App() {
       alert("Por favor agrega pedidos antes de calcular.");
       return;
     }
+
     const stockToUse = singleScrap ? [singleScrap] : inventory;
+
     if (stockToUse.length === 0) {
       alert("No hay inventario disponible.");
       return;
     }
 
-    const bestOption = calculateBestOption(stockToUse, orders);
-    setResult(bestOption);
+    const { usedScraps, pendingOrders } = calculateAllCuts(stockToUse, orders);
 
-    if (!bestOption) {
-      alert("No se encontró ningún retazo válido.");
+    setResult({ usedScraps, pendingOrders });
+
+    if (usedScraps.length === 0) {
+      alert("No se encontró ningún retazo válido para las medidas solicitadas.");
     } else {
-      // En celular, cambiamos automáticamente a la pestaña de resultados
+      if (pendingOrders.length > 0) {
+        alert(`Atención: Faltaron ${pendingOrders.length} piezas por cortar. (El material disponible no fue suficiente o las piezas son muy grandes)`);
+      }
       setActiveTab('results');
     }
   };
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans text-slate-800 flex flex-col">
-      {/* Header Fijo */}
       <header className="bg-white shadow-sm border-b border-slate-200 sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center gap-4">
@@ -69,7 +71,6 @@ function App() {
               <LayoutGrid className="w-8 h-8 text-blue-600" />
               <h1 className="text-xl font-bold tracking-tight">Cortes<span className="text-blue-600">Pro</span></h1>
             </div>
-            {/* Unit Selector */}
             <select
               value={unit}
               onChange={(e) => setUnit(e.target.value)}
@@ -80,7 +81,6 @@ function App() {
               <option value="m">m</option>
             </select>
           </div>
-          {/* Botón flotante solo visible en Móvil */}
           <button
             onClick={() => handleCalculate()}
             className="md:hidden bg-blue-600 text-white p-2 rounded-full shadow-lg active:scale-95 transition-transform"
@@ -90,7 +90,6 @@ function App() {
         </div>
       </header>
 
-      {/* Navegación Tabs (Solo Móvil) */}
       <div className="md:hidden flex bg-white border-b border-slate-200 sticky top-[60px] z-10 shadow-sm">
         <button
           onClick={() => setActiveTab('inputs')}
@@ -108,14 +107,10 @@ function App() {
         </button>
       </div>
 
-      {/* Contenido Principal */}
       <main className="flex-grow max-w-7xl mx-auto w-full p-4 lg:p-6">
 
-        {/* LAYOUT DE ESCRITORIO (Grid de 2 columnas) */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
 
-          {/* COLUMNA IZQUIERDA: Inputs */}
-          {/* En móvil: Solo se muestra si activeTab es 'inputs'. En PC: Siempre visible (col-span-5) */}
           <div className={`lg:col-span-5 space-y-6 ${activeTab === 'inputs' ? 'block' : 'hidden lg:block'}`}>
 
 
@@ -131,7 +126,6 @@ function App() {
               onRemove={handleRemoveOrder}
               unit={unit}
             />
-            {/* Botón Grande de Calcular (Solo PC) */}
             <div className="hidden lg:block pt-4">
               <button
                 onClick={() => handleCalculate()}
@@ -143,10 +137,19 @@ function App() {
             </div>
           </div>
 
-          {/* COLUMNA DERECHA: Resultados (Sticky en Desktop) */}
           <div className={`lg:col-span-7 flex flex-col ${activeTab === 'results' ? 'flex h-[calc(100vh-140px)]' : 'hidden lg:flex lg:sticky lg:top-24 lg:h-[calc(100vh-8rem)]'}`}>
-            <div className="flex-grow h-full w-full">
-              <Visualizer result={result} unit={unit} />
+            <div className={`space-y-6 overflow-y-auto h-full pr-2 ${!result ? 'flex flex-col' : ''}`}>
+              {!result ? (
+                <Visualizer result={null} unit={unit} />
+              ) : (
+                result.usedScraps.map((scrapResult, index) => (
+                  <Visualizer
+                    key={scrapResult.cutId || index}
+                    result={scrapResult}
+                    unit={unit}
+                  />
+                ))
+              )}
             </div>
           </div>
 

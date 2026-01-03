@@ -1,114 +1,54 @@
-/**
- * Optimizer Logic
- * 
- * Logic to find the best scrap for a given set of ordered pieces.
- * Algorithm: Best Fit Heuristic (simplified for the prompt's requirements)
- * 
- * Inputs:
- * - stock: Array of { id, width, height, quantity }
- * - orders: Array of { width, height, quantity }
- * 
- * Returns:
- * - result: { bestScrap, usageDetails } or null
- */
-
-export const calculateBestOption = (stock, orders) => {
-    // 1. Helper function: Normaliza inputs (Inglés/Español) y valida ceros
-    const getVal = (obj, keys) => {
-        for (const key of keys) {
-            if (obj[key] !== undefined && obj[key] !== null && obj[key] !== '') {
-                const val = Number(obj[key]);
-                if (!isNaN(val) && val > 0) return val;
-            }
+const getVal = (obj, keys) => {
+    for (const key of keys) {
+        if (obj[key] !== undefined && obj[key] !== null && obj[key] !== '') {
+            const val = Number(obj[key]);
+            if (!isNaN(val) && val > 0) return val;
         }
-        return 0; // Invalid
-    };
+    }
+    return 0;
+};
 
-    // Flatten orders into individual pieces
-    let pieces = [];
-    orders.forEach(order => {
-        const width = getVal(order, ['width', 'ancho']);
-        const height = getVal(order, ['height', 'alto']);
-        const quantity = getVal(order, ['quantity', 'cantidad']);
-
-        if (width <= 0 || height <= 0 || quantity <= 0) return;
-
-        for (let i = 0; i < quantity; i++) {
-            pieces.push({
-                width: width,
-                height: height,
-                originalIndex: i
-            });
-        }
-    });
-
-    if (pieces.length === 0) return null;
-
-    // Sort pieces by area (largest first) to try to fit big ones first
-    pieces.sort((a, b) => (b.width * b.height) - (a.width * a.height));
-
+const findBestScrap = (availableStock, piecesToPack) => {
     let bestOption = null;
-    let minWaste = Infinity;
-    let maxPiecesFit = -1;
 
-    // Evaluate each scrap
-    stock.forEach(item => {
-        // Normalize scrap dimensions
-        const width = getVal(item, ['width', 'ancho']);
-        const height = getVal(item, ['height', 'alto']);
-        const quantity = getVal(item, ['quantity', 'cantidad']);
+    availableStock.forEach(item => {
+        if (item.quantity <= 0) return;
 
-        if (width <= 0 || height <= 0 || quantity <= 0) return;
+        const scrapW = getVal(item, ['width', 'ancho']);
+        const scrapH = getVal(item, ['height', 'alto']);
 
-        const scrap = { ...item, width, height, quantity };
+        if (scrapW <= 0 || scrapH <= 0) return;
 
-        // Try to fit pieces into this scrap
-        // We need a 2D packing simulation. 
-        // For this "Best Candidate" feature, we will use a simplified Shelf Packing or Guillotine packer logic.
-        // We will simulate placing pieces one by one.
+        const simulation = advancedGuillotinePack(scrapW, scrapH, piecesToPack);
 
-        const simulation = simpleGuillotinePack(scrap.width, scrap.height, pieces);
-
-        // Calculate metrics
-        const scrapArea = scrap.width * scrap.height;
-        const usedArea = simulation.placedPieces.reduce((sum, p) => sum + (p.width * p.height), 0);
-
-        // If no pieces fit, ignore
         if (simulation.placedPieces.length === 0) return;
 
-        // "Priorizar el retazo que genere el menor desperdicio y donde quepan la mayor cantidad de piezas"
-        // We prioritize Max Pieces first, then Min Waste.
-        // Or weighted score.
-
-        // Let's define the criteria:
-        // 1. Max pieces count
-        // 2. If tie, min waste (which is equivalent to smaller scrap area for same used area)
-
-        // Note: The prompt says "Priorizar el retazo que genere el menor desperdicio ... y donde quepan la mayor cantidad de piezas".
-        // Usually, fitting ALL pieces is the goal. 
-
+        const scrapArea = scrapW * scrapH;
+        const usedArea = simulation.placedPieces.reduce((sum, p) => sum + (p.width * p.height), 0);
         const waste = scrapArea - usedArea;
         const wastePercent = (waste / scrapArea) * 100;
 
         const candidate = {
-            scrapId: scrap.id,
-            totalPieces: pieces.length,
+            scrapId: item.id,
+            totalPieces: piecesToPack.length,
             fittedPieces: simulation.placedPieces.length,
             wastePercent: wastePercent,
-            layout: simulation.placements, // coordinates
-            scrapDims: { width: scrap.width, height: scrap.height },
-            scrapName: scrap.name || `Retazo #${scrap.id}`
+            layout: simulation.placements,
+            remainingPiecesRef: piecesToPack.filter(p => !simulation.placedPieces.includes(p)),
+            placedPiecesRef: simulation.placedPieces,
+            scrapDims: { width: scrapW, height: scrapH },
+            scrapName: item.name || `Retazo #${item.id}`,
+            originalItem: item
         };
 
-        // Comparison Logic
         let isBetter = false;
-
         if (!bestOption) {
             isBetter = true;
         } else {
             if (candidate.fittedPieces > bestOption.fittedPieces) {
                 isBetter = true;
-            } else if (candidate.fittedPieces === bestOption.fittedPieces) {
+            }
+            else if (candidate.fittedPieces === bestOption.fittedPieces) {
                 if (candidate.wastePercent < bestOption.wastePercent) {
                     isBetter = true;
                 }
@@ -123,107 +63,112 @@ export const calculateBestOption = (stock, orders) => {
     return bestOption;
 };
 
-/**
- * Best Fit Guillotine Packer
- * 
- * Logic:
- * 1. Best Fit: Checks all free rectangles to find the one where the piece fits "best" (Minimizing waste).
- * 2. Split Heuristic: "Maximize Larger Side Remainder" (Minimizing Remainder).
- *   - Chooses the split axis that leaves the largest area or most useful shape.
- */
-const simpleGuillotinePack = (containerWidth, containerHeight, piecesToPack) => {
+export const calculateAllCuts = (stock, orders) => {
+    let tempStock = stock.map(item => ({
+        ...item,
+        quantity: getVal(item, ['quantity', 'cantidad'])
+    })).filter(i => i.quantity > 0);
+
+    let allPieces = [];
+    orders.forEach(order => {
+        const qty = getVal(order, ['quantity', 'cantidad', 'qty']);
+        const w = getVal(order, ['width', 'ancho']);
+        const h = getVal(order, ['height', 'alto']);
+        if (w <= 0 || h <= 0) return;
+        for (let i = 0; i < qty; i++) {
+            allPieces.push({
+                width: w,
+                height: h,
+                originalIndex: i
+            });
+        }
+    });
+
+    allPieces.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+
+    const usedScraps = [];
+    let pendingPieces = [...allPieces];
+    let safetyCounter = 0;
+
+    while (pendingPieces.length > 0 && safetyCounter < 100) {
+        safetyCounter++;
+
+        const solution = findBestScrap(tempStock, pendingPieces);
+
+        if (!solution) {
+            break;
+        }
+
+        const cutList = solution.placedPiecesRef.map((p, idx) =>
+            `• ${p.width} x ${p.height} (Pieza)`
+        );
+
+        usedScraps.push({
+            ...solution,
+            cutList: cutList,
+            cutId: `cut-${usedScraps.length + 1}`
+        });
+
+        const placedSet = new Set(solution.placedPiecesRef);
+        pendingPieces = pendingPieces.filter(p => !placedSet.has(p));
+
+        const stockItem = tempStock.find(i => i.id === solution.scrapId);
+        if (stockItem) {
+            stockItem.quantity -= 1;
+        }
+    }
+
+    return {
+        usedScraps: usedScraps,
+        pendingOrders: pendingPieces
+    };
+};
+
+export const calculateBestOption = (stock, orders) => {
+    const res = calculateAllCuts(stock, orders);
+    if (!res.usedScraps || res.usedScraps.length === 0) return null;
+    return res.usedScraps[0];
+};
+
+const advancedGuillotinePack = (containerWidth, containerHeight, piecesToPack) => {
     let placedPieces = [];
     let placements = [];
-    let freeRectangles = [{ x: 0, y: 0, w: Number(containerWidth), h: Number(containerHeight) }];
+    let freeRects = [{ x: 0, y: 0, w: Number(containerWidth), h: Number(containerHeight) }];
 
-    // Heuristic: Selection of Free Rect
-    // BAF: Best Area Fit (Smallest Area that fits)
-    const scoreRect = (rect, pW, pH) => {
-        const areaFit = rect.w * rect.h - pW * pH;
-        // const shortSideFit = Math.min(rect.w - pW, rect.h - pH);
-        return areaFit;
-    };
-
-    // Helper: Split a free rect into two new free rects after placement
-    const splitRect = (rect, pW, pH) => {
-        // We have two split strategies:
-        // 1. Split Horizontally (Cut along X-axis visual? No, Cut Horizontal Line):
-        //    Result H-Split:
-        //      Right: x + pW, y, w - pW, pH
-        //      Bottom: x, y + pH, w, h - pH (Bottom is full width)
-        //
-        // 2. Split Vertically:
-        //    Result V-Split:
-        //      Right: x + pW, y, w - pW, h (Right is full height)
-        //      Bottom: x, y + pH, pW, h - pH
-
-        const wRem = rect.w - pW;
-        const hRem = rect.h - pH;
-
-        // Strategy: Maximize the area (or min dimension) of the LARGER remaining rectangle.
-        // Or simply "Split along shorter axis" (Minimize cut length).
-
-        // If w < h (Tall rect): Cut length W is shorter -> Cut Horizontal.
-        // H-Split creates Box (w * hRem) as the major piece.
-        // If w >= h (Wide rect): Cut length H is shorter -> Cut Vertical.
-        // V-Split creates Box (wRem * h) as the major piece.
-
-        const splitHorizontally = rect.w < rect.h;
-
-        const newRects = [];
-        if (splitHorizontally) {
-            // Horizontal Split (Bottom is big)
-            if (hRem > 0) newRects.push({ x: rect.x, y: rect.y + pH, w: rect.w, h: hRem });
-            if (wRem > 0) newRects.push({ x: rect.x + pW, y: rect.y, w: wRem, h: pH });
-        } else {
-            // Vertical Split (Right is big)
-            if (wRem > 0) newRects.push({ x: rect.x + pW, y: rect.y, w: wRem, h: rect.h });
-            if (hRem > 0) newRects.push({ x: rect.x, y: rect.y + pH, w: pW, h: hRem });
-        }
-        return newRects;
-    };
-
-    for (let i = 0; i < piecesToPack.length; i++) {
-        const piece = piecesToPack[i];
+    piecesToPack.forEach(piece => {
         let bestScore = Infinity;
         let bestRectIndex = -1;
         let bestRotated = false;
 
-        // Step 1: Find Best Fit
-        // Iterate ALL free rectangles
-        for (let j = 0; j < freeRectangles.length; j++) {
-            const rect = freeRectangles[j];
+        for (let i = 0; i < freeRects.length; i++) {
+            const rect = freeRects[i];
 
-            // Try Normal
             if (rect.w >= piece.width && rect.h >= piece.height) {
-                const score = scoreRect(rect, piece.width, piece.height);
+                const score = (rect.w * rect.h) - (piece.width * piece.height);
                 if (score < bestScore) {
                     bestScore = score;
-                    bestRectIndex = j;
+                    bestRectIndex = i;
                     bestRotated = false;
                 }
             }
-            // Try Rotated
-            // Optimization: If square, don't check twice?
+
             if (piece.width !== piece.height) {
                 if (rect.w >= piece.height && rect.h >= piece.width) {
-                    const score = scoreRect(rect, piece.height, piece.width);
+                    const score = (rect.w * rect.h) - (piece.height * piece.width);
                     if (score < bestScore) {
                         bestScore = score;
-                        bestRectIndex = j;
+                        bestRectIndex = i;
                         bestRotated = true;
                     }
                 }
             }
         }
 
-        // Step 2: Place and Split
         if (bestRectIndex !== -1) {
-            const rect = freeRectangles[bestRectIndex];
+            const rect = freeRects[bestRectIndex];
             const pW = bestRotated ? piece.height : piece.width;
             const pH = bestRotated ? piece.width : piece.height;
 
-            // Record Placement
             placements.push({
                 x: rect.x,
                 y: rect.y,
@@ -233,14 +178,30 @@ const simpleGuillotinePack = (containerWidth, containerHeight, piecesToPack) => 
             });
             placedPieces.push(piece);
 
-            // Split
-            const newRects = splitRect(rect, pW, pH);
+            const wRem = rect.w - pW;
+            const hRem = rect.h - pH;
 
-            // Update Free Rects
-            freeRectangles.splice(bestRectIndex, 1);
-            freeRectangles.push(...newRects);
+            let splitHorizontal = true;
+
+            if (wRem * rect.h > rect.w * hRem) {
+                splitHorizontal = false;
+            } else {
+                splitHorizontal = true;
+            }
+
+            let newRects = [];
+            if (splitHorizontal) {
+                if (hRem > 0) newRects.push({ x: rect.x, y: rect.y + pH, w: rect.w, h: hRem });
+                if (wRem > 0) newRects.push({ x: rect.x + pW, y: rect.y, w: wRem, h: pH });
+            } else {
+                if (wRem > 0) newRects.push({ x: rect.x + pW, y: rect.y, w: wRem, h: rect.h });
+                if (hRem > 0) newRects.push({ x: rect.x, y: rect.y + pH, w: pW, h: hRem });
+            }
+
+            freeRects.splice(bestRectIndex, 1);
+            freeRects.push(...newRects);
         }
-    }
+    });
 
     return { placedPieces, placements };
 };
